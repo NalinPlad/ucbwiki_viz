@@ -311,7 +311,7 @@
     async function loadEmbeddingsData() {
       try {
         // Fetch the embeddings data
-        const response = await fetch("/data/embeddings.tsv");
+        const response = await fetch("https://nalinplad.github.io/ucbwiki_viz/data/embeddings.tsv");
         const data = await response.text();
 
         // Parse TSV data
