@@ -951,165 +951,6 @@
               ),
             };
 
-          // Create points geometry for efficient rendering
-          const pointsGeometry =
-            new THREE.BufferGeometry();
-          const positions =
-            new Float32Array(
-              dataPoints.length *
-                3
-            );
-          const colors =
-            new Float32Array(
-              dataPoints.length *
-                3
-            );
-          const sizes =
-            new Float32Array(
-              dataPoints.length
-            );
-
-          // Normalize coordinates to [-10, 10] range
-          dataPoints.forEach(
-            (
-              point,
-              i
-            ) => {
-              const x =
-                ((point.u1 -
-                  bounds.minX) /
-                  (bounds.maxX -
-                    bounds.minX) -
-                  0.5) *
-                20;
-              const y =
-                ((point.u2 -
-                  bounds.minY) /
-                  (bounds.maxY -
-                    bounds.minY) -
-                  0.5) *
-                20;
-              const z =
-                ((point.u3 -
-                  bounds.minZ) /
-                  (bounds.maxZ -
-                    bounds.minZ) -
-                  0.5) *
-                20;
-
-              positions[
-                i *
-                  3
-              ] =
-                x;
-              positions[
-                i *
-                  3 +
-                  1
-              ] =
-                y;
-              positions[
-                i *
-                  3 +
-                  2
-              ] =
-                z;
-
-              // Set color based on school
-              const schoolColor =
-                schoolColors[
-                  point
-                    .school
-                ] ||
-                schoolColors[
-                  ""
-                ];
-              colors[
-                i *
-                  3
-              ] =
-                schoolColor[0];
-              colors[
-                i *
-                  3 +
-                  1
-              ] =
-                schoolColor[1];
-              colors[
-                i *
-                  3 +
-                  2
-              ] =
-                schoolColor[2];
-
-              // Scale size based on total edits (normalize to 0.02 - 0.15 range)
-              const normalizedEdits =
-                (point.totalEdits -
-                  minEdits) /
-                editRange;
-              sizes[
-                i
-              ] =
-                0.02 +
-                normalizedEdits *
-                  0.13; // Min 0.02, max 0.15
-            }
-          );
-
-          pointsGeometry.setAttribute(
-            "position",
-            new THREE.BufferAttribute(
-              positions,
-              3
-            )
-          );
-          pointsGeometry.setAttribute(
-            "color",
-            new THREE.BufferAttribute(
-              colors,
-              3
-            )
-          );
-          pointsGeometry.setAttribute(
-            "size",
-            new THREE.BufferAttribute(
-              sizes,
-              1
-            )
-          );
-
-          // Create points material with distance-based transparency
-          const pointsMaterial =
-            new THREE.PointsMaterial(
-              {
-                size: 0.05,
-                vertexColors: true,
-                transparent: true,
-                opacity: 0.8,
-                sizeAttenuation: true, // Makes points smaller when farther away
-              }
-            );
-
-          // Create points mesh
-          const points =
-            new THREE.Points(
-              pointsGeometry,
-              pointsMaterial
-            );
-          scene.add(
-            points
-          );
-
-          // Store original sizes for restoration (from the actual attribute array)
-          const originalSizes =
-            new Float32Array(
-              points
-                .geometry
-                .attributes
-                .size
-                .array
-            );
-
           // Track which schools are enabled (all enabled by default)
           const schoolEnabled =
             {
@@ -1125,47 +966,359 @@
               "": true,
             };
 
-          // Function to update point visibility based on enabled schools
-          function updatePointVisibility() {
-            const sizesArray =
-              points
-                .geometry
-                .attributes
-                .size
-                .array;
-            for (
-              let i = 0;
-              i <
-              dataPoints.length;
-              i++
-            ) {
-              const point =
-                dataPoints[
-                  i
-                ];
+          // Group data points by school
+          const pointsBySchool =
+            {};
+          dataPoints.forEach(
+            (
+              point
+            ) => {
               const school =
                 point.school ||
                 "";
               if (
-                schoolEnabled[
+                !pointsBySchool[
                   school
                 ]
               ) {
-                sizesArray[
-                  i
+                pointsBySchool[
+                  school
                 ] =
-                  originalSizes[
-                    i
-                  ];
-              } else {
-                sizesArray[
-                  i
-                ] =
-                  0; // Hide point by setting size to 0
+                  [];
               }
+              pointsBySchool[
+                school
+              ].push(
+                point
+              );
             }
-            // Mark the attribute as needing update
-            points.geometry.attributes.size.needsUpdate = true;
+          );
+
+          // Store point objects for each school
+          const schoolPointsObjects =
+            {};
+          const globalIndexToSchool =
+            {}; // Maps global index to school name
+          const globalIndexToPointIndex =
+            {}; // Maps global index to point index within school
+
+          // Create a single combined points object for raycaster (invisible, just for hit detection)
+          const allPositions =
+            new Float32Array(
+              dataPoints.length *
+                3
+            );
+          const allColors =
+            new Float32Array(
+              dataPoints.length *
+                3
+            );
+          const allSizes =
+            new Float32Array(
+              dataPoints.length
+            );
+
+          // Create separate point groups for each school
+          Object.keys(
+            pointsBySchool
+          ).forEach(
+            (
+              school
+            ) => {
+              const schoolPoints =
+                pointsBySchool[
+                  school
+                ];
+              const schoolGeometry =
+                new THREE.BufferGeometry();
+              const schoolPositions =
+                new Float32Array(
+                  schoolPoints.length *
+                    3
+                );
+              const schoolColorsArray =
+                new Float32Array(
+                  schoolPoints.length *
+                    3
+                );
+              const schoolSizes =
+                new Float32Array(
+                  schoolPoints.length
+                );
+
+              schoolPoints.forEach(
+                (
+                  point,
+                  schoolIndex
+                ) => {
+                  // Normalize coordinates to [-10, 10] range
+                  const x =
+                    ((point.u1 -
+                      bounds.minX) /
+                      (bounds.maxX -
+                        bounds.minX) -
+                      0.5) *
+                    20;
+                  const y =
+                    ((point.u2 -
+                      bounds.minY) /
+                      (bounds.maxY -
+                        bounds.minY) -
+                      0.5) *
+                    20;
+                  const z =
+                    ((point.u3 -
+                      bounds.minZ) /
+                      (bounds.maxZ -
+                        bounds.minZ) -
+                      0.5) *
+                    20;
+
+                  schoolPositions[
+                    schoolIndex *
+                      3
+                  ] =
+                    x;
+                  schoolPositions[
+                    schoolIndex *
+                      3 +
+                      1
+                  ] =
+                    y;
+                  schoolPositions[
+                    schoolIndex *
+                      3 +
+                      2
+                  ] =
+                    z;
+
+                  // Set color based on school
+                  const schoolColor =
+                    schoolColors[
+                      school
+                    ] ||
+                    schoolColors[
+                      ""
+                    ];
+                  schoolColorsArray[
+                    schoolIndex *
+                      3
+                  ] =
+                    schoolColor[0];
+                  schoolColorsArray[
+                    schoolIndex *
+                      3 +
+                      1
+                  ] =
+                    schoolColor[1];
+                  schoolColorsArray[
+                    schoolIndex *
+                      3 +
+                      2
+                  ] =
+                    schoolColor[2];
+
+                  // Scale size based on total edits
+                  const normalizedEdits =
+                    (point.totalEdits -
+                      minEdits) /
+                    editRange;
+                  schoolSizes[
+                    schoolIndex
+                  ] =
+                    0.02 +
+                    normalizedEdits *
+                      0.13;
+
+                  // Store mapping for raycaster
+                  const globalIndex =
+                    dataPoints.indexOf(
+                      point
+                    );
+                  globalIndexToSchool[
+                    globalIndex
+                  ] =
+                    school;
+                  globalIndexToPointIndex[
+                    globalIndex
+                  ] =
+                    schoolIndex;
+
+                  // Also populate combined arrays for raycaster
+                  allPositions[
+                    globalIndex *
+                      3
+                  ] =
+                    x;
+                  allPositions[
+                    globalIndex *
+                      3 +
+                      1
+                  ] =
+                    y;
+                  allPositions[
+                    globalIndex *
+                      3 +
+                      2
+                  ] =
+                    z;
+                  allColors[
+                    globalIndex *
+                      3
+                  ] =
+                    schoolColor[0];
+                  allColors[
+                    globalIndex *
+                      3 +
+                      1
+                  ] =
+                    schoolColor[1];
+                  allColors[
+                    globalIndex *
+                      3 +
+                      2
+                  ] =
+                    schoolColor[2];
+                  allSizes[
+                    globalIndex
+                  ] =
+                    schoolSizes[
+                      schoolIndex
+                    ];
+                }
+              );
+
+              schoolGeometry.setAttribute(
+                "position",
+                new THREE.BufferAttribute(
+                  schoolPositions,
+                  3
+                )
+              );
+              schoolGeometry.setAttribute(
+                "color",
+                new THREE.BufferAttribute(
+                  schoolColorsArray,
+                  3
+                )
+              );
+              schoolGeometry.setAttribute(
+                "size",
+                new THREE.BufferAttribute(
+                  schoolSizes,
+                  1
+                )
+              );
+
+              const schoolMaterial =
+                new THREE.PointsMaterial(
+                  {
+                    size: 0.05,
+                    vertexColors: true,
+                    transparent: true,
+                    opacity: 0.8,
+                    sizeAttenuation: true,
+                  }
+                );
+
+              const schoolPointsObject =
+                new THREE.Points(
+                  schoolGeometry,
+                  schoolMaterial
+                );
+              schoolPointsObject.visible =
+                schoolEnabled[
+                  school
+                ] ||
+                false; // Use enabled state
+              scene.add(
+                schoolPointsObject
+              );
+              schoolPointsObjects[
+                school
+              ] =
+                schoolPointsObject;
+            }
+          );
+
+          // Create a combined points object for raycaster (invisible, just for hit detection)
+          const combinedGeometry =
+            new THREE.BufferGeometry();
+          combinedGeometry.setAttribute(
+            "position",
+            new THREE.BufferAttribute(
+              allPositions,
+              3
+            )
+          );
+          combinedGeometry.setAttribute(
+            "color",
+            new THREE.BufferAttribute(
+              allColors,
+              3
+            )
+          );
+          combinedGeometry.setAttribute(
+            "size",
+            new THREE.BufferAttribute(
+              allSizes,
+              1
+            )
+          );
+          const combinedMaterial =
+            new THREE.PointsMaterial(
+              {
+                size: 0.05,
+                vertexColors: true,
+                transparent: true,
+                opacity: 0, // Invisible, just for raycaster
+                sizeAttenuation: true,
+              }
+            );
+          const points =
+            new THREE.Points(
+              combinedGeometry,
+              combinedMaterial
+            );
+          scene.add(
+            points
+          );
+
+          // Function to update point visibility based on enabled schools
+          function updatePointVisibility() {
+            Object.keys(
+              schoolPointsObjects
+            ).forEach(
+              (
+                school
+              ) => {
+                if (
+                  schoolPointsObjects[
+                    school
+                  ]
+                ) {
+                  schoolPointsObjects[
+                    school
+                  ].visible =
+                    schoolEnabled[
+                      school
+                    ] ||
+                    false;
+                }
+              }
+            );
+            const visibleCount =
+              Object.values(
+                schoolEnabled
+              ).filter(
+                (
+                  v
+                ) =>
+                  v
+              ).length;
+            console.log(
+              `Updated visibility: ${visibleCount} schools visible`
+            );
           }
 
           // Utility functions for color management
@@ -1175,124 +1328,178 @@
             g,
             b
           ) {
-            const colors =
-              points
-                .geometry
-                .attributes
-                .color
-                .array;
-            colors[
-              index *
-                3
-            ] =
-              r;
-            colors[
-              index *
-                3 +
-                1
-            ] =
-              g;
-            colors[
-              index *
-                3 +
-                2
-            ] =
-              b;
+            const school =
+              globalIndexToSchool[
+                index
+              ];
+            const schoolIndex =
+              globalIndexToPointIndex[
+                index
+              ];
+            if (
+              school &&
+              schoolPointsObjects[
+                school
+              ] &&
+              schoolIndex !==
+                undefined
+            ) {
+              const colors =
+                schoolPointsObjects[
+                  school
+                ]
+                  .geometry
+                  .attributes
+                  .color
+                  .array;
+              colors[
+                schoolIndex *
+                  3
+              ] =
+                r;
+              colors[
+                schoolIndex *
+                  3 +
+                  1
+              ] =
+                g;
+              colors[
+                schoolIndex *
+                  3 +
+                  2
+              ] =
+                b;
+              schoolPointsObjects[
+                school
+              ].geometry.attributes.color.needsUpdate =
+                true;
+            }
           }
 
           function setPointSize(
             index,
             size
           ) {
-            const sizes =
-              points
-                .geometry
-                .attributes
-                .size
-                .array;
-            sizes[
-              index
-            ] =
-              size;
+            const school =
+              globalIndexToSchool[
+                index
+              ];
+            const schoolIndex =
+              globalIndexToPointIndex[
+                index
+              ];
+            if (
+              school &&
+              schoolPointsObjects[
+                school
+              ] &&
+              schoolIndex !==
+                undefined
+            ) {
+              const sizes =
+                schoolPointsObjects[
+                  school
+                ]
+                  .geometry
+                  .attributes
+                  .size
+                  .array;
+              sizes[
+                schoolIndex
+              ] =
+                size;
+              schoolPointsObjects[
+                school
+              ].geometry.attributes.size.needsUpdate =
+                true;
+            }
           }
 
           function resetAllPointsToDefault() {
-            const colors =
-              points
-                .geometry
-                .attributes
-                .color
-                .array;
-            const sizes =
-              points
-                .geometry
-                .attributes
-                .size
-                .array;
-            for (
-              let i = 0;
-              i <
-              dataPoints.length;
-              i++
-            ) {
-              const point =
-                dataPoints[
-                  i
-                ];
-              const school =
-                point.school ||
-                "";
-              // Restore school color
-              const schoolColor =
-                schoolColors[
-                  point
-                    .school
-                ] ||
-                schoolColors[
-                  ""
-                ];
-              colors[
-                i *
-                  3
-              ] =
-                schoolColor[0];
-              colors[
-                i *
-                  3 +
-                  1
-              ] =
-                schoolColor[1];
-              colors[
-                i *
-                  3 +
-                  2
-              ] =
-                schoolColor[2];
-              // Restore edit-based size, but respect enabled/disabled state
-              if (
-                schoolEnabled[
-                  school
-                ]
-              ) {
-                const normalizedEdits =
-                  (point.totalEdits -
-                    minEdits) /
-                  editRange;
-                sizes[
-                  i
-                ] =
-                  0.02 +
-                  normalizedEdits *
-                    0.13;
-              } else {
-                sizes[
-                  i
-                ] =
-                  0; // Hide disabled schools
+            // Reset all school point groups to their default colors and sizes
+            Object.keys(
+              schoolPointsObjects
+            ).forEach(
+              (
+                school
+              ) => {
+                const schoolPoints =
+                  schoolPointsObjects[
+                    school
+                  ];
+                if (
+                  !schoolPoints
+                )
+                  return;
+
+                const colors =
+                  schoolPoints
+                    .geometry
+                    .attributes
+                    .color
+                    .array;
+                const sizes =
+                  schoolPoints
+                    .geometry
+                    .attributes
+                    .size
+                    .array;
+                const schoolDataPoints =
+                  pointsBySchool[
+                    school
+                  ] ||
+                  [];
+
+                schoolDataPoints.forEach(
+                  (
+                    point,
+                    schoolIndex
+                  ) => {
+                    // Restore school color
+                    const schoolColor =
+                      schoolColors[
+                        point
+                          .school
+                      ] ||
+                      schoolColors[
+                        ""
+                      ];
+                    colors[
+                      schoolIndex *
+                        3
+                    ] =
+                      schoolColor[0];
+                    colors[
+                      schoolIndex *
+                        3 +
+                        1
+                    ] =
+                      schoolColor[1];
+                    colors[
+                      schoolIndex *
+                        3 +
+                        2
+                    ] =
+                      schoolColor[2];
+
+                    // Restore edit-based size
+                    const normalizedEdits =
+                      (point.totalEdits -
+                        minEdits) /
+                      editRange;
+                    sizes[
+                      schoolIndex
+                    ] =
+                      0.02 +
+                      normalizedEdits *
+                        0.13;
+                  }
+                );
+
+                schoolPoints.geometry.attributes.color.needsUpdate = true;
+                schoolPoints.geometry.attributes.size.needsUpdate = true;
               }
-            }
-            points.geometry.attributes.color.needsUpdate = true;
-            points.geometry.attributes.size.needsUpdate = true;
+            );
           }
 
           function highlightPoint(
@@ -1308,8 +1515,6 @@
               index,
               0.1
             ); // Larger size
-            points.geometry.attributes.color.needsUpdate = true;
-            points.geometry.attributes.size.needsUpdate = true;
           }
 
           // Raycaster for hover detection
@@ -1960,6 +2165,9 @@
             document.querySelectorAll(
               ".legend-item"
             );
+          console.log(
+            `Found ${legendItems.length} legend items`
+          );
           legendItems.forEach(
             (
               item
@@ -1970,17 +2178,24 @@
                   event
                 ) => {
                   event.stopPropagation();
+                  event.preventDefault();
                   const school =
                     item
                       .dataset
                       .school ||
                     "";
+
+                  // Toggle the enabled state
                   schoolEnabled[
                     school
                   ] =
                     !schoolEnabled[
                       school
                     ];
+
+                  console.log(
+                    `Toggling ${school}: ${schoolEnabled[school]}`
+                  );
 
                   // Update visual state
                   if (
